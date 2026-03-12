@@ -7,7 +7,7 @@
     "publisher": "REPOZY",
     "repository": {
       "type": "git",
-      "url": ""
+      "url": "https://github.com/REPOZY/Claude-Code-Usage-Tracker.git"
     },
     "license": "MIT",
     "engines": {
