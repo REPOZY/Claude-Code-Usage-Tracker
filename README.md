@@ -1,4 +1,4 @@
-# Claude Code Usage Tracker
+# Claude Code Token Usage Tracker
 
 A lightweight VSCode/Cursor extension that displays real-time Claude Code token usage directly in your status bar.
 
