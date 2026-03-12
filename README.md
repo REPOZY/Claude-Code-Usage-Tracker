@@ -10,7 +10,7 @@ A lightweight VSCode/Cursor extension that displays real-time Claude Code token 
 - **Session countdown** — Time remaining in your 5-hour Claude Code session
 
 
-https://ibb.co/mFhHDZDN
+![alt text](<Claude Code Token Usage Tracker.png>)
 
 
 ## How It Works
