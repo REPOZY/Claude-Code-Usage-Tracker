@@ -107,6 +107,7 @@ export function activate(context: vscode.ExtensionContext) {
         `**Claude Counter**\n\n` +
         `Model: ${metrics.model}\n\n` +
         `5h window usage: ${metrics.tokensDisplay}k / ${(contextWindow / 1000).toFixed(0)}k tokens (${metrics.progress}%)\n\n` +
+        `Input: ${metrics.inputTokensDisplay} | Cache read: ${metrics.cacheReadDisplay} | Cache write: ${metrics.cacheCreationDisplay} | Output: ${metrics.outputTokensDisplay}\n\n` +
         `Active sessions: ${metrics.activeSessionCount}\n\n` +
         `${metrics.cache}\n\n` +
         `5-hour window resets in: ${metrics.sessionRemaining}`

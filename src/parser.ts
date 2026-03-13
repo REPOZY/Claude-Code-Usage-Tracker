@@ -14,12 +14,18 @@ export interface SessionMetrics {
   sessionRemaining: string;
   model: string;
   activeSessionCount: number;
+  inputTokensDisplay: string;
+  outputTokensDisplay: string;
+  cacheReadDisplay: string;
+  cacheCreationDisplay: string;
 }
 
 interface TokenEntry {
   timestamp: number;
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
 }
 
 interface CacheEvent {
@@ -29,15 +35,19 @@ interface CacheEvent {
 // Per-file incremental parse state
 interface ParseState {
   byteOffset: number;
-  entries: TokenEntry[];
+  // Deduplicated by requestId — only the final entry per API call is kept
+  // (streaming produces multiple log lines per request with cumulative values)
+  requestEntries: Map<string, TokenEntry>;
   cacheEvents: CacheEvent[];
   latestModel: string;
 }
 
 // Raw data extracted from a single log file (within the 5h window)
 interface FileData {
+  totalInputTokens: number;
   totalOutputTokens: number;
-  latestInputTokens: number;
+  totalCacheReadTokens: number;
+  totalCacheCreationTokens: number;
   earliestTimestamp: number;
   lastCacheEvent: number;
   latestModel: string;
@@ -51,14 +61,20 @@ const ACTIVE_SESSION_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
 // Map of file path → incremental parse state (survives across calls)
 const stateMap = new Map<string, ParseState>();
 
+// Fixed window start: persists across updates until the window expires.
+// This ensures the "Reset in" timer counts down to a fixed point and
+// doesn't shift forward as entries age out.
+let windowStartTimestamp = 0;
+
 export function resetParseState(): void {
   stateMap.clear();
+  windowStartTimestamp = 0;
 }
 
 /**
  * Incrementally parse a single JSONL log file.
  * Only reads newly appended bytes since the last call for this file.
- * Returns data filtered to the 5-hour window.
+ * Deduplicates by requestId to avoid counting streaming chunks multiple times.
  */
 async function parseFile(filePath: string): Promise<FileData | null> {
   try {
@@ -74,7 +90,7 @@ async function parseFile(filePath: string): Promise<FileData | null> {
     if (!state) {
       state = {
         byteOffset: 0,
-        entries: [],
+        requestEntries: new Map(),
         cacheEvents: [],
         latestModel: '',
       };
@@ -104,23 +120,34 @@ async function parseFile(filePath: string): Promise<FileData | null> {
             const ts = msg.timestamp ? new Date(msg.timestamp).getTime() : 0;
 
             const model = msg.model || msg.message?.model;
-            if (model) {
+            if (model && model !== '<synthetic>') {
               state.latestModel = model;
             }
 
             const usage: UsageData | undefined = msg.usage || msg.message?.usage;
-            if (usage && ((usage.input_tokens || 0) > 0 || (usage.output_tokens || 0) > 0)) {
-              state.entries.push({
-                timestamp: ts || Date.now(),
-                inputTokens: usage.input_tokens || 0,
-                outputTokens: usage.output_tokens || 0,
-              });
-            }
+            const requestId: string | undefined = msg.requestId;
 
-            const cacheRead = usage?.cache_read_input_tokens || msg.cache_read_input_tokens || 0;
-            const cacheCreation = usage?.cache_creation_input_tokens || msg.cache_creation_input_tokens || 0;
-            if (cacheRead > 0 || cacheCreation > 0) {
-              state.cacheEvents.push({ timestamp: ts || Date.now() });
+            if (usage && requestId) {
+              const inputTokens = usage.input_tokens || 0;
+              const outputTokens = usage.output_tokens || 0;
+              const cacheReadTokens = usage.cache_read_input_tokens || 0;
+              const cacheCreationTokens = usage.cache_creation_input_tokens || 0;
+
+              if (inputTokens > 0 || outputTokens > 0 || cacheReadTokens > 0 || cacheCreationTokens > 0) {
+                // Overwrite previous entry for same requestId: streaming chunks
+                // have cumulative values, so the last one is the final total
+                state.requestEntries.set(requestId, {
+                  timestamp: ts || Date.now(),
+                  inputTokens,
+                  outputTokens,
+                  cacheReadTokens,
+                  cacheCreationTokens,
+                });
+              }
+
+              if (cacheReadTokens > 0 || cacheCreationTokens > 0) {
+                state.cacheEvents.push({ timestamp: ts || Date.now() });
+              }
             }
           } catch {
             // skip malformed lines
@@ -133,36 +160,38 @@ async function parseFile(filePath: string): Promise<FileData | null> {
       }
     }
 
-    // Prune entries older than 5 hours
+    // Prune entries older than 5 hours (memory housekeeping)
     const cutoff = Date.now() - FIVE_HOURS_MS;
-    state.entries = state.entries.filter(e => e.timestamp >= cutoff);
+    for (const [reqId, entry] of state.requestEntries) {
+      if (entry.timestamp < cutoff) {
+        state.requestEntries.delete(reqId);
+      }
+    }
     state.cacheEvents = state.cacheEvents.filter(e => e.timestamp >= cutoff);
 
-    if (state.entries.length === 0) {
+    if (state.requestEntries.size === 0) {
       return null;
     }
 
-    // Compute aggregated data from entries within the 5h window
+    // Aggregate data from all deduplicated entries
+    let totalInputTokens = 0;
     let totalOutputTokens = 0;
-    let latestInputTokens = 0;
-    let latestInputTimestamp = 0;
+    let totalCacheReadTokens = 0;
+    let totalCacheCreationTokens = 0;
     let earliestTimestamp = Infinity;
     let latestEntryTimestamp = 0;
 
-    for (const entry of state.entries) {
+    for (const entry of state.requestEntries.values()) {
+      totalInputTokens += entry.inputTokens;
       totalOutputTokens += entry.outputTokens;
+      totalCacheReadTokens += entry.cacheReadTokens;
+      totalCacheCreationTokens += entry.cacheCreationTokens;
 
       if (entry.timestamp < earliestTimestamp) {
         earliestTimestamp = entry.timestamp;
       }
       if (entry.timestamp > latestEntryTimestamp) {
         latestEntryTimestamp = entry.timestamp;
-      }
-
-      // Track the most recent input token count (represents current context size)
-      if (entry.inputTokens > 0 && entry.timestamp >= latestInputTimestamp) {
-        latestInputTokens = entry.inputTokens;
-        latestInputTimestamp = entry.timestamp;
       }
     }
 
@@ -175,8 +204,10 @@ async function parseFile(filePath: string): Promise<FileData | null> {
     }
 
     return {
+      totalInputTokens,
       totalOutputTokens,
-      latestInputTokens,
+      totalCacheReadTokens,
+      totalCacheCreationTokens,
       earliestTimestamp: earliestTimestamp === Infinity ? 0 : earliestTimestamp,
       lastCacheEvent,
       latestModel: state.latestModel,
@@ -194,8 +225,19 @@ async function parseFile(filePath: string): Promise<FileData | null> {
 export async function parseActiveSessions(filePaths: string[], contextWindow: number): Promise<SessionMetrics | null> {
   const now = Date.now();
 
+  // Check if the fixed window has expired — clear everything and start fresh
+  if (windowStartTimestamp > 0 && now > windowStartTimestamp + FIVE_HOURS_MS) {
+    for (const state of stateMap.values()) {
+      state.requestEntries.clear();
+      state.cacheEvents = [];
+    }
+    windowStartTimestamp = 0;
+  }
+
+  let totalInputTokens = 0;
   let totalOutputTokens = 0;
-  let latestInputTokens = 0;
+  let totalCacheReadTokens = 0;
+  let totalCacheCreationTokens = 0;
   let earliestTimestamp = 0;
   let lastCacheEvent = 0;
   let latestModel = '';
@@ -208,12 +250,10 @@ export async function parseActiveSessions(filePaths: string[], contextWindow: nu
 
     hasData = true;
 
+    totalInputTokens += data.totalInputTokens;
     totalOutputTokens += data.totalOutputTokens;
-
-    // Use input tokens from the most recent file (first in sorted list)
-    if (latestInputTokens === 0) {
-      latestInputTokens = data.latestInputTokens;
-    }
+    totalCacheReadTokens += data.totalCacheReadTokens;
+    totalCacheCreationTokens += data.totalCacheCreationTokens;
 
     if (earliestTimestamp === 0 || data.earliestTimestamp < earliestTimestamp) {
       earliestTimestamp = data.earliestTimestamp;
@@ -233,6 +273,11 @@ export async function parseActiveSessions(filePaths: string[], contextWindow: nu
 
   if (!hasData) return null;
 
+  // Establish the fixed window start on first data
+  if (windowStartTimestamp === 0) {
+    windowStartTimestamp = earliestTimestamp;
+  }
+
   // Clean up stale entries from the state map
   const activeSet = new Set(filePaths);
   for (const key of stateMap.keys()) {
@@ -241,9 +286,12 @@ export async function parseActiveSessions(filePaths: string[], contextWindow: nu
     }
   }
 
-  const totalTokens = latestInputTokens + totalOutputTokens;
-  const sessionAgeMs = earliestTimestamp > 0 ? now - earliestTimestamp : 0;
-  const remainingMs = Math.max(0, FIVE_HOURS_MS - sessionAgeMs);
+  // Total tokens: all input types + output
+  const totalTokens = totalInputTokens + totalCacheReadTokens + totalCacheCreationTokens + totalOutputTokens;
+
+  // Timer counts down from the fixed window start + 5h
+  const windowEndMs = windowStartTimestamp + FIVE_HOURS_MS;
+  const remainingMs = Math.max(0, windowEndMs - now);
   const progress = Math.min(Math.round((totalTokens / contextWindow) * 100), 100);
 
   const cacheAgeMs = lastCacheEvent > 0 ? now - lastCacheEvent : Infinity;
@@ -256,9 +304,13 @@ export async function parseActiveSessions(filePaths: string[], contextWindow: nu
     tokensDisplay: (totalTokens / 1000).toFixed(1),
     progress,
     cache: cacheStr,
-    sessionRemaining: earliestTimestamp > 0 ? formatTime(remainingMs) : 'unknown',
+    sessionRemaining: formatTime(remainingMs),
     model: latestModel ? formatModelName(latestModel) : 'Unknown',
     activeSessionCount,
+    inputTokensDisplay: formatTokenCount(totalInputTokens),
+    outputTokensDisplay: formatTokenCount(totalOutputTokens),
+    cacheReadDisplay: formatTokenCount(totalCacheReadTokens),
+    cacheCreationDisplay: formatTokenCount(totalCacheCreationTokens),
   };
 }
 
@@ -267,6 +319,12 @@ function formatModelName(model: string): string {
   if (model.includes('sonnet')) return 'Sonnet';
   if (model.includes('haiku')) return 'Haiku';
   return model.replace('claude-', '').split('-').slice(0, 2).join(' ');
+}
+
+function formatTokenCount(tokens: number): string {
+  if (tokens >= 1000000) return (tokens / 1000000).toFixed(1) + 'M';
+  if (tokens >= 1000) return (tokens / 1000).toFixed(1) + 'k';
+  return tokens.toString();
 }
 
 function formatTime(ms: number): string {

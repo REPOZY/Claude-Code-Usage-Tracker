@@ -19,15 +19,18 @@ Output goes to `dist/`. To test, open this folder in VSCode/Cursor and press F5 
 
 Two source files in `src/`:
 
-- **extension.ts** — VSCode extension lifecycle. Activates on startup, creates a status bar item, polls for updates on a configurable interval, and watches `~/.claude/projects/` for file changes via chokidar (with Windows polling). Reads two settings from `claudeCounter.*` configuration: `contextWindow` (default 200k) and `refreshIntervalSeconds` (default 3).
+- **extension.ts** — VSCode extension lifecycle. Activates on startup, creates a status bar item, polls for updates on a configurable interval, and watches `~/.claude/projects/` for file changes via chokidar (with Windows polling). Reads two settings from `claudeCounter.*` configuration: `contextWindow` (default 200k) and `refreshIntervalSeconds` (default 3). Tooltip shows token breakdown by type (input, cache read, cache write, output).
 
-- **parser.ts** — Incrementally parses Claude Code JSONL log files. Stores timestamped token entries per file and prunes entries older than 5 hours on each update. `parseActiveSessions()` aggregates data across all active log files, computing total tokens (latest input + accumulated output within the 5h window), cache status (5-minute TTL), session countdown, and active session count (files with activity in the last 10 minutes). Returns a `SessionMetrics` object.
+- **parser.ts** — Incrementally parses Claude Code JSONL log files. Deduplicates entries by `requestId` to avoid counting streaming chunks multiple times (Claude Code logs multiple lines per API call during streaming, each with cumulative token values). Counts ALL token types: `input_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, and `output_tokens`. Uses a fixed 5-hour window (from earliest entry) that fully resets when expired, matching Anthropic's rate limit behavior. Returns a `SessionMetrics` object.
 
 ## Key Details
 
 - Log file discovery: scans all subdirectories of `~/.claude/projects/` for `.jsonl` files modified within the last 5 hours.
+- Token counting: sums `input_tokens + cache_read_input_tokens + cache_creation_input_tokens + output_tokens` per deduplicated API call (`requestId`). The `input_tokens` field in logs is typically very small (1-3); the real input is in the cache fields.
+- Streaming deduplication: a single API call produces multiple JSONL entries (one per content block during streaming), all sharing the same `requestId`. Only the last entry per `requestId` is kept since values are cumulative.
 - Token progress thresholds: >85% shows error color, >65% shows warning color.
 - Cache is considered "active" if a cache read/creation event occurred within the last 5 minutes.
-- All metrics (tokens, timer, sessions) are scoped to a rolling 5-hour window — entries older than 5h are automatically pruned from the in-memory state.
+- Window model: uses a fixed 5-hour window starting from the earliest tracked entry. When `now > windowStart + 5h`, all data clears and the extension shows "waiting" until new activity. This means the "Reset in" timer counts down to a fixed point and the display cleanly resets to zero when it expires.
 - Active session count uses a 10-minute activity threshold, not file mtime.
+- Synthetic entries (model: `<synthetic>`) are filtered out of model name tracking.
 - The extension entry point is `dist/extension.js` (CommonJS, ES2020 target).

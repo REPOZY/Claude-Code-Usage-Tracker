@@ -9,11 +9,9 @@ A lightweight VSCode/Cursor extension that displays real-time Claude Code token 
 - **Cache status** — Whether prompt caching is active and time remaining on the 5-minute cache window
 - **Session countdown** — Time remaining in your 5-hour Claude Code session
 
+## How it looks
 
-How the Status-bar looks within your IDE
 ![alt text](images/status-bar.png)
-
-
 
 ![alt text](images/status-bar-on-hover.png)
 
