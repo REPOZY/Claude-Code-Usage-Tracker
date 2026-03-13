@@ -14,10 +14,12 @@ export interface SessionMetrics {
   sessionRemaining: string;
   model: string;
   activeSessionCount: number;
-  inputTokensDisplay: string;
-  outputTokensDisplay: string;
+  contextDisplay: string;
+  outputDisplay: string;
   cacheReadDisplay: string;
   cacheCreationDisplay: string;
+  inputTokensDisplay: string;
+  messageCount: number;
 }
 
 interface TokenEntry {
@@ -42,18 +44,6 @@ interface ParseState {
   latestModel: string;
 }
 
-// Raw data extracted from a single log file (within the 5h window)
-interface FileData {
-  totalInputTokens: number;
-  totalOutputTokens: number;
-  totalCacheReadTokens: number;
-  totalCacheCreationTokens: number;
-  earliestTimestamp: number;
-  lastCacheEvent: number;
-  latestModel: string;
-  latestEntryTimestamp: number;
-}
-
 const FIVE_HOURS_MS = 5 * 60 * 60 * 1000;
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const ACTIVE_SESSION_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
@@ -75,8 +65,9 @@ export function resetParseState(): void {
  * Incrementally parse a single JSONL log file.
  * Only reads newly appended bytes since the last call for this file.
  * Deduplicates by requestId to avoid counting streaming chunks multiple times.
+ * No pruning or aggregation — that happens in parseActiveSessions.
  */
-async function parseFile(filePath: string): Promise<FileData | null> {
+async function parseFile(filePath: string): Promise<void> {
   try {
     const stat = await fs.promises.stat(filePath);
     let state = stateMap.get(filePath);
@@ -159,123 +150,56 @@ async function parseFile(filePath: string): Promise<FileData | null> {
         await fd.close();
       }
     }
-
-    // Prune entries older than 5 hours (memory housekeeping)
-    const cutoff = Date.now() - FIVE_HOURS_MS;
-    for (const [reqId, entry] of state.requestEntries) {
-      if (entry.timestamp < cutoff) {
-        state.requestEntries.delete(reqId);
-      }
-    }
-    state.cacheEvents = state.cacheEvents.filter(e => e.timestamp >= cutoff);
-
-    if (state.requestEntries.size === 0) {
-      return null;
-    }
-
-    // Aggregate data from all deduplicated entries
-    let totalInputTokens = 0;
-    let totalOutputTokens = 0;
-    let totalCacheReadTokens = 0;
-    let totalCacheCreationTokens = 0;
-    let earliestTimestamp = Infinity;
-    let latestEntryTimestamp = 0;
-
-    for (const entry of state.requestEntries.values()) {
-      totalInputTokens += entry.inputTokens;
-      totalOutputTokens += entry.outputTokens;
-      totalCacheReadTokens += entry.cacheReadTokens;
-      totalCacheCreationTokens += entry.cacheCreationTokens;
-
-      if (entry.timestamp < earliestTimestamp) {
-        earliestTimestamp = entry.timestamp;
-      }
-      if (entry.timestamp > latestEntryTimestamp) {
-        latestEntryTimestamp = entry.timestamp;
-      }
-    }
-
-    // Find the most recent cache event
-    let lastCacheEvent = 0;
-    for (const ce of state.cacheEvents) {
-      if (ce.timestamp > lastCacheEvent) {
-        lastCacheEvent = ce.timestamp;
-      }
-    }
-
-    return {
-      totalInputTokens,
-      totalOutputTokens,
-      totalCacheReadTokens,
-      totalCacheCreationTokens,
-      earliestTimestamp: earliestTimestamp === Infinity ? 0 : earliestTimestamp,
-      lastCacheEvent,
-      latestModel: state.latestModel,
-      latestEntryTimestamp,
-    };
   } catch {
-    return null;
+    // skip files that can't be read
   }
+}
+
+/**
+ * Determine the true window start by walking all entries chronologically.
+ * Anthropic's rate limit resets every 5 hours from your first message.
+ * If there's a gap > 5h between entries, the later entry starts a new window.
+ * This correctly detects session boundaries after rate limit pauses.
+ */
+function computeWindowStart(allTimestamps: number[]): number {
+  if (allTimestamps.length === 0) return 0;
+
+  allTimestamps.sort((a, b) => a - b);
+
+  let windowStart = allTimestamps[0];
+  for (const ts of allTimestamps) {
+    if (ts > windowStart + FIVE_HOURS_MS) {
+      // This entry came after the previous window expired — new window
+      windowStart = ts;
+    }
+  }
+
+  return windowStart;
 }
 
 /**
  * Parse and aggregate all active log files within the 5-hour window.
  * Files should be sorted newest-first so the most recent model name wins.
+ *
+ * Token metric: cumulative output tokens across all sessions.
+ * Output tokens are the primary driver of rate limits (5x cost vs input)
+ * and cache read tokens are explicitly excluded from API rate limits.
+ * Context info is shown separately in the tooltip for reference.
  */
 export async function parseActiveSessions(filePaths: string[], contextWindow: number): Promise<SessionMetrics | null> {
   const now = Date.now();
 
-  // Check if the fixed window has expired — clear everything and start fresh
+  // Check if the fixed window has expired — clear everything and start fresh.
+  // We clear the entire stateMap (including byte offsets) so that parseFile()
+  // re-reads files from scratch and can discover entries for the new window.
   if (windowStartTimestamp > 0 && now > windowStartTimestamp + FIVE_HOURS_MS) {
-    for (const state of stateMap.values()) {
-      state.requestEntries.clear();
-      state.cacheEvents = [];
-    }
+    stateMap.clear();
     windowStartTimestamp = 0;
   }
 
-  let totalInputTokens = 0;
-  let totalOutputTokens = 0;
-  let totalCacheReadTokens = 0;
-  let totalCacheCreationTokens = 0;
-  let earliestTimestamp = 0;
-  let lastCacheEvent = 0;
-  let latestModel = '';
-  let hasData = false;
-  let activeSessionCount = 0;
-
+  // Phase 1: Parse all files (incremental loading only, no pruning)
   for (const fp of filePaths) {
-    const data = await parseFile(fp);
-    if (!data) continue;
-
-    hasData = true;
-
-    totalInputTokens += data.totalInputTokens;
-    totalOutputTokens += data.totalOutputTokens;
-    totalCacheReadTokens += data.totalCacheReadTokens;
-    totalCacheCreationTokens += data.totalCacheCreationTokens;
-
-    if (earliestTimestamp === 0 || data.earliestTimestamp < earliestTimestamp) {
-      earliestTimestamp = data.earliestTimestamp;
-    }
-    if (data.lastCacheEvent > lastCacheEvent) {
-      lastCacheEvent = data.lastCacheEvent;
-    }
-    if (!latestModel && data.latestModel) {
-      latestModel = data.latestModel;
-    }
-
-    // Count as active session if there was activity in the last 10 minutes
-    if (data.latestEntryTimestamp > 0 && (now - data.latestEntryTimestamp) < ACTIVE_SESSION_THRESHOLD_MS) {
-      activeSessionCount++;
-    }
-  }
-
-  if (!hasData) return null;
-
-  // Establish the fixed window start on first data
-  if (windowStartTimestamp === 0) {
-    windowStartTimestamp = earliestTimestamp;
+    await parseFile(fp);
   }
 
   // Clean up stale entries from the state map
@@ -286,13 +210,85 @@ export async function parseActiveSessions(filePaths: string[], contextWindow: nu
     }
   }
 
-  // Total tokens: all input types + output
-  const totalTokens = totalInputTokens + totalCacheReadTokens + totalCacheCreationTokens + totalOutputTokens;
+  // Phase 2: Determine true window start if not yet established
+  if (windowStartTimestamp === 0) {
+    const allTimestamps: number[] = [];
+    for (const state of stateMap.values()) {
+      for (const entry of state.requestEntries.values()) {
+        allTimestamps.push(entry.timestamp);
+      }
+    }
 
-  // Timer counts down from the fixed window start + 5h
-  const windowEndMs = windowStartTimestamp + FIVE_HOURS_MS;
-  const remainingMs = Math.max(0, windowEndMs - now);
-  const progress = Math.min(Math.round((totalTokens / contextWindow) * 100), 100);
+    if (allTimestamps.length === 0) return null;
+
+    windowStartTimestamp = computeWindowStart(allTimestamps);
+  }
+
+  // Phase 3: Aggregate from stateMap, counting only entries within the current window
+  const windowEnd = windowStartTimestamp + FIVE_HOURS_MS;
+
+  let totalOutput = 0;
+  let totalMessages = 0;
+  let latestRequestTimestamp = 0;
+  let latestInputTokens = 0;
+  let latestCacheRead = 0;
+  let latestCacheCreation = 0;
+  let lastCacheEvent = 0;
+  let latestModel = '';
+  let activeSessionCount = 0;
+  let hasData = false;
+
+  for (const state of stateMap.values()) {
+    let fileLatestEntryTs = 0;
+    let fileHasWindowEntries = false;
+
+    for (const entry of state.requestEntries.values()) {
+      // Only count entries within the current window
+      if (entry.timestamp < windowStartTimestamp || entry.timestamp > windowEnd) {
+        continue;
+      }
+
+      fileHasWindowEntries = true;
+      totalOutput += entry.outputTokens;
+      totalMessages++;
+
+      if (entry.timestamp > latestRequestTimestamp) {
+        latestRequestTimestamp = entry.timestamp;
+        latestInputTokens = entry.inputTokens;
+        latestCacheRead = entry.cacheReadTokens;
+        latestCacheCreation = entry.cacheCreationTokens;
+      }
+      if (entry.timestamp > fileLatestEntryTs) {
+        fileLatestEntryTs = entry.timestamp;
+      }
+    }
+
+    if (fileHasWindowEntries) {
+      hasData = true;
+
+      // Count as active session if there was activity in the last 10 minutes
+      if (fileLatestEntryTs > 0 && (now - fileLatestEntryTs) < ACTIVE_SESSION_THRESHOLD_MS) {
+        activeSessionCount++;
+      }
+
+      for (const ce of state.cacheEvents) {
+        if (ce.timestamp >= windowStartTimestamp && ce.timestamp <= windowEnd && ce.timestamp > lastCacheEvent) {
+          lastCacheEvent = ce.timestamp;
+        }
+      }
+
+      if (!latestModel && state.latestModel) {
+        latestModel = state.latestModel;
+      }
+    }
+  }
+
+  if (!hasData) return null;
+
+  // Primary metric: cumulative output tokens
+  const latestFullInput = latestInputTokens + latestCacheRead + latestCacheCreation;
+  const remainingMs = Math.max(0, windowEnd - now);
+  const progress = Math.min(Math.round((totalOutput / contextWindow) * 100), 100);
 
   const cacheAgeMs = lastCacheEvent > 0 ? now - lastCacheEvent : Infinity;
   const cacheActive = cacheAgeMs < CACHE_TTL_MS;
@@ -301,16 +297,18 @@ export async function parseActiveSessions(filePaths: string[], contextWindow: nu
     : 'Cache: inactive';
 
   return {
-    tokensDisplay: (totalTokens / 1000).toFixed(1),
+    tokensDisplay: (totalOutput / 1000).toFixed(1),
     progress,
     cache: cacheStr,
     sessionRemaining: formatTime(remainingMs),
     model: latestModel ? formatModelName(latestModel) : 'Unknown',
     activeSessionCount,
-    inputTokensDisplay: formatTokenCount(totalInputTokens),
-    outputTokensDisplay: formatTokenCount(totalOutputTokens),
-    cacheReadDisplay: formatTokenCount(totalCacheReadTokens),
-    cacheCreationDisplay: formatTokenCount(totalCacheCreationTokens),
+    contextDisplay: formatTokenCount(latestFullInput),
+    outputDisplay: formatTokenCount(totalOutput),
+    cacheReadDisplay: formatTokenCount(latestCacheRead),
+    cacheCreationDisplay: formatTokenCount(latestCacheCreation),
+    inputTokensDisplay: formatTokenCount(latestInputTokens),
+    messageCount: totalMessages,
   };
 }
 

@@ -3,7 +3,7 @@
     "displayName": "Claude Counter Status Bar",
     "description": "Real-time Claude Code token usage, context window %, cache status, and session countdown in your status bar",
     "icon": "icon.png",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "publisher": "REPOZY",
     "repository": {
       "type": "git",

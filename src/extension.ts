@@ -106,11 +106,11 @@ export function activate(context: vscode.ExtensionContext) {
       statusBarItem.tooltip = new vscode.MarkdownString(
         `**Claude Counter**\n\n` +
         `Model: ${metrics.model}\n\n` +
-        `5h window usage: ${metrics.tokensDisplay}k / ${(contextWindow / 1000).toFixed(0)}k tokens (${metrics.progress}%)\n\n` +
-        `Input: ${metrics.inputTokensDisplay} | Cache read: ${metrics.cacheReadDisplay} | Cache write: ${metrics.cacheCreationDisplay} | Output: ${metrics.outputTokensDisplay}\n\n` +
-        `Active sessions: ${metrics.activeSessionCount}\n\n` +
-        `${metrics.cache}\n\n` +
-        `5-hour window resets in: ${metrics.sessionRemaining}`
+        `Output tokens: ${metrics.tokensDisplay}k / ${(contextWindow / 1000).toFixed(0)}k (${metrics.progress}%)\n\n` +
+        `Messages sent: ${metrics.messageCount} (5h window)\n\n` +
+        `Context (latest): ${metrics.contextDisplay} (input: ${metrics.inputTokensDisplay} + cache read: ${metrics.cacheReadDisplay} + cache write: ${metrics.cacheCreationDisplay})\n\n` +
+        `Active sessions: ${metrics.activeSessionCount} | ${metrics.cache}\n\n` +
+        `Resets in: ${metrics.sessionRemaining}`
       );
     } finally {
       updatePending = false;
