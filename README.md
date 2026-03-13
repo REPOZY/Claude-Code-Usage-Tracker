@@ -6,7 +6,7 @@ A lightweight VSCode/Cursor extension that displays real-time Claude Code token 
 
 - **Token count** — Shows current conversation token usage (e.g. `142.5k`)
 - **Context window %** — How full your context window is, with color-coded warnings (yellow >65%, red >85%)
-- **Cache status** — Whether prompt caching is active and time remaining on the 5-minute cache window
+- **Cache status** — Whether prompt caching is active and time remaining on the 5-minute cache window (The cache typically has a 5-minute time-to-live (TTL) for Pro/API users.)
 - **Session countdown** — Time remaining in your 5-hour Claude Code session
 
 
@@ -21,10 +21,17 @@ A lightweight VSCode/Cursor extension that displays real-time Claude Code token 
 
 ## How It Works
 
-The extension reads Claude Code's JSONL log files from `~/.claude/projects/`, finds recently modified logs, and parses token usage data from them. All metrics are scoped to a rolling 5-hour window — token counts, the session timer, and active session detection automatically reset as log entries age out of the window. Updates happen both on a polling interval and via file system watching for near-instant feedback.
+The extension reads Claude Code's JSONL log files from `~/.claude/projects/`, finds recently modified logs, and parses token usage data from them. All metrics are scoped to a **fixed 5-hour session window** that mirrors Anthropic's actual rate limit behavior.
 
-- **Token count** only includes usage from the last 5 hours. Once entries fall outside the window, they are pruned and no longer count.
-- **Active sessions** counts log files with activity in the last 10 minutes, reflecting actually running Claude Code instances rather than all files touched in the last 5 hours.
+### Session Window Detection
+
+The extension automatically detects when a new 5-hour session begins by analyzing gaps in your usage history. When there is a gap of more than 5 hours between API calls (e.g. after hitting a rate limit and waiting), the first message after that gap is recognized as the start of a new session window. The "Reset in" timer counts down from this detected start point, and when it expires all counters reset to zero.
+
+### Other Details
+
+- **Active sessions** counts log files with activity in the last 10 minutes, reflecting actually running Claude Code instances.
+- **Streaming deduplication** — Claude Code logs multiple JSONL entries per API call during streaming (each with cumulative token values). The extension deduplicates by `requestId`, keeping only the final entry per call.
+- **Cross-project tracking** — scans all subdirectories of `~/.claude/projects/`, so usage across different projects is combined into a single session view.
 
 ## Settings
 
