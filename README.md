@@ -37,7 +37,7 @@ The extension automatically detects when a new 5-hour session begins by analyzin
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `claudeCounter.contextWindow` | `200000` | Context window size in tokens. All current Claude models (Opus, Sonnet, Haiku) use a 200k context window. |
+| `claudeCounter.contextWindow` | `200000` | Context window size in tokens. All current Claude models (Opus, Sonnet, Haiku) use a 200k context window for Pro users. Max, Team, and Enterprise subscriptions have access to a 1M context window. |
 | `claudeCounter.refreshIntervalSeconds` | `3` | How often the status bar refreshes (in seconds). |
 
 ## Installation
@@ -45,18 +45,18 @@ The extension automatically detects when a new 5-hour session begins by analyzin
 ### From VSIX
 
 1. Download the `.vsix` file
-2. In VSCode/Cursor: `Extensions` > `...` > `Install from VSIX...`
+2. In VSCode/Cursor: `Extensions` > `...` > `Install from VSIX...` 
+   OR press CTRL+SHIFT+P > `Extensions: Install from VSIX...` and select the Claude Statusbar VSIX file.
 
 ### From Source
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/REPOZY/Claude-Code-Usage-Tracker
 cd claude-counter-statusbar
 npm install
 npm run compile
 ```
 
-Then press **F5** to launch the Extension Development Host for testing.
 
 ## Requirements
 
