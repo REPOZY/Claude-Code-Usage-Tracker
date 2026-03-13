@@ -10,8 +10,12 @@ A lightweight VSCode/Cursor extension that displays real-time Claude Code token 
 - **Session countdown** — Time remaining in your 5-hour Claude Code session
 
 
+How the Status-bar looks within your IDE:
 ![alt text](images/status-bar.png)
 
+
+When you hover over the status bar:
+![alt text](images/status-bar-on-hover.png)
 
 ## How It Works
 
