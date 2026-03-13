@@ -101,7 +101,7 @@ export function activate(context: vscode.ExtensionContext) {
       const filled = Math.round((progress / 100) * barLength);
       const bar = '\u25A0'.repeat(filled) + '\u25A1'.repeat(barLength - filled);
 
-      statusBarItem.text = `$(spark) ${metrics.tokensDisplay}k ${bar} ${metrics.progress}% • Reset in ${metrics.sessionRemaining}`;
+      statusBarItem.text = `$(spark) ${metrics.tokensDisplay}k ${bar} ${metrics.progress}% • ${metrics.messageCount} msgs • Reset in ${metrics.sessionRemaining}`;
 
       statusBarItem.tooltip = new vscode.MarkdownString(
         `**Claude Session Tracker**\n\n` +
