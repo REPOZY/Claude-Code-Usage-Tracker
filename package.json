@@ -1,13 +1,13 @@
 {
-    "name": "claude-counter-statusbar",
-    "displayName": "Claude Counter Status Bar",
-    "description": "Real-time Claude Code token usage, context window %, cache status, and session countdown in your status bar",
+    "name": "claude-session-tracker",
+    "displayName": "Claude Session Tracker",
+    "description": "Real-time Claude Code session tracking — token usage, context window %, cache status, and 5-hour session countdown in your status bar",
     "icon": "icon.png",
     "version": "1.0.0",
     "publisher": "REPOZY",
     "repository": {
       "type": "git",
-      "url": "https://github.com/REPOZY/Claude-Code-Usage-Tracker.git"
+      "url": "https://github.com/REPOZY/Claude-Session-Tracker.git"
     },
     "license": "MIT",
     "engines": {
@@ -22,7 +22,7 @@
     "main": "./dist/extension.js",
     "contributes": {
       "configuration": {
-        "title": "Claude Counter Status Bar",
+        "title": "Claude Session Tracker",
         "properties": {
           "claudeCounter.contextWindow": {
             "type": "number",

@@ -104,7 +104,7 @@ export function activate(context: vscode.ExtensionContext) {
       statusBarItem.text = `$(spark) ${metrics.tokensDisplay}k ${bar} ${metrics.progress}% • Reset in ${metrics.sessionRemaining}`;
 
       statusBarItem.tooltip = new vscode.MarkdownString(
-        `**Claude Counter**\n\n` +
+        `**Claude Session Tracker**\n\n` +
         `Model: ${metrics.model}\n\n` +
         `Output tokens: ${metrics.tokensDisplay}k / ${(contextWindow / 1000).toFixed(0)}k (${metrics.progress}%)\n\n` +
         `Messages sent: ${metrics.messageCount} (5h window)\n\n` +

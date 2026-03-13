@@ -1,4 +1,4 @@
-# Claude Code Token Usage Tracker
+# Claude Session Tracker
 
 A lightweight VSCode/Cursor extension that displays real-time Claude Code token usage directly in your status bar.
 
@@ -51,8 +51,8 @@ The extension automatically detects when a new 5-hour session begins by analyzin
 ### From Source
 
 ```bash
-git clone https://github.com/REPOZY/Claude-Code-Usage-Tracker
-cd claude-counter-statusbar
+git clone https://github.com/REPOZY/Claude-Session-Tracker
+cd Claude-Session-Tracker
 npm install
 npm run compile
 ```
